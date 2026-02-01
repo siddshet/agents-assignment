@@ -2,6 +2,12 @@ import logging
 
 from dotenv import load_dotenv
 
+import sys
+import os
+
+# Add local livekit-agents to path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../livekit-agents')))
+
 from livekit.agents import (
     Agent,
     AgentServer,

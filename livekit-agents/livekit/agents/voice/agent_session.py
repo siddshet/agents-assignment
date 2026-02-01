@@ -89,6 +89,7 @@ class AgentSessionOptions:
     preemptive_generation: bool
     tts_text_transforms: Sequence[TextTransforms] | None
     ivr_detection: bool
+    interruption_ignore_words: list[str]
 
 
 Userdata_T = TypeVar("Userdata_T")
@@ -159,6 +160,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         preemptive_generation: bool = False,
         ivr_detection: bool = False,
+        interruption_ignore_words: list[str] | None = None,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
@@ -264,6 +266,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._video_sampler = video_sampler
 
+        if interruption_ignore_words is None:
+            interruption_ignore_words = ['yeah', 'ok','okay','hmm','oh','right', 'uh-huh', 'got it', 'sure']
+
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
@@ -288,6 +293,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=use_tts_aligned_transcript
             if is_given(use_tts_aligned_transcript)
             else None,
+            interruption_ignore_words=interruption_ignore_words,
         )
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False

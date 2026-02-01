@@ -15,13 +15,43 @@ from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk._logs import (
-    LogData,
-    LoggerProvider,
-    LoggingHandler,
-    LogRecord,
-    LogRecordProcessor,
-)
+# Robust import for OpenTelemetry logs
+try:
+    from opentelemetry.sdk._logs import LogData
+except ImportError:
+    from typing import Any
+    LogData = Any
+
+try:
+    from opentelemetry.sdk._logs import LoggerProvider
+except ImportError:
+    class LoggerProvider:
+        def add_log_record_processor(self, processor): pass
+
+try:
+    from opentelemetry.sdk._logs import LoggingHandler
+except ImportError:
+    import logging
+    class LoggingHandler(logging.Handler):
+        def __init__(self, level=logging.NOTSET, logger_provider=None):
+            super().__init__(level)
+
+try:
+    from opentelemetry.sdk._logs import LogRecord
+except ImportError:
+    class LogRecord:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+try:
+    from opentelemetry.sdk._logs import LogRecordProcessor
+except ImportError:
+    class LogRecordProcessor:
+        def emit(self, log_data): pass
+        def force_flush(self, timeout_millis=30000): return True
+        def shutdown(self): pass
+
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider

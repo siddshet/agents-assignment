@@ -125,6 +125,7 @@ class AgentActivity(RecognitionHooks):
         self._paused_speech: SpeechHandle | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         self._interrupt_paused_speech_task: asyncio.Task[None] | None = None
+        self._current_interim_transcript: str = ""  # Track interim transcript for soft interruption check
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -309,6 +310,32 @@ class AgentActivity(RecognitionHooks):
         )
 
         return use_aligned_transcript is True
+
+    def _is_soft_interruption(self, text: str) -> bool:
+        """Check if the text consists only of words in the interruption_ignore_words list.
+        
+        Args:
+            text: The transcript text to check
+            
+        Returns:
+            True if all words in the text are in the ignore list, False otherwise
+        """
+        if not text or not self._session.options.interruption_ignore_words:
+            return False
+        
+        # Clean the text: lowercase and remove punctuation
+        import string
+        cleaned_text = text.lower().translate(str.maketrans('', '', string.punctuation))
+        words = cleaned_text.split()
+        
+        if not words:
+            return False
+        
+        # Check if all words are in the ignore list
+        ignore_words_lower = [w.lower() for w in self._session.options.interruption_ignore_words]
+        is_soft = all(word in ignore_words_lower for word in words)
+        
+        return is_soft
 
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
@@ -1170,6 +1197,18 @@ class AgentActivity(RecognitionHooks):
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
+        # Check for soft interruptions before doing anything
+        # Use both the tracked interim transcript and the current transcript from audio recognition
+        text_to_check = self._current_interim_transcript
+        if not text_to_check and self._audio_recognition is not None:
+            text_to_check = self._audio_recognition.current_transcript
+        
+        if text_to_check and self._is_soft_interruption(text_to_check):
+            return
+
+        if opt.interruption_ignore_words and not text_to_check:
+            return
+
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
             return
@@ -1228,6 +1267,9 @@ class AgentActivity(RecognitionHooks):
             last_speaking_time=speech_end_time,
         )
 
+        # Clear interim transcript when speech ends
+        self._current_interim_transcript = ""
+
         if (
             self._paused_speech
             and (timeout := self._session.options.false_interruption_timeout) is not None
@@ -1241,12 +1283,20 @@ class AgentActivity(RecognitionHooks):
             return
 
         if ev.speech_duration >= self._session.options.min_interruption_duration:
+            # Check if we have an interim transcript and if it's a soft interruption
+            # If so, don't interrupt at all
+            if self._current_interim_transcript and self._is_soft_interruption(self._current_interim_transcript):
+                return
+            
             self._interrupt_by_audio_activity()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
+
+        # Track the interim transcript for soft interruption checking in VAD
+        self._current_interim_transcript = ev.alternatives[0].text
 
         self._session._user_input_transcribed(
             UserInputTranscribedEvent(
@@ -1261,7 +1311,10 @@ class AgentActivity(RecognitionHooks):
             "manual",
             "realtime_llm",
         ):
-            self._interrupt_by_audio_activity()
+            # Don't interrupt for soft interruptions (filler words only)
+            is_soft = self._is_soft_interruption(ev.alternatives[0].text)
+            if not is_soft:
+                self._interrupt_by_audio_activity()
 
             if (
                 speaking is False
@@ -1270,6 +1323,19 @@ class AgentActivity(RecognitionHooks):
             ):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
+
+            # Resume audio if it was paused by VAD
+            if is_soft and self._paused_speech is not None:
+                if self._session.output.audio and self._session.output.audio.can_pause:
+                    self._session.output.audio.resume()
+                    self._session._update_agent_state("speaking")
+                
+                self._paused_speech = None
+                if self._false_interruption_timer:
+                    self._false_interruption_timer.cancel()
+                    self._false_interruption_timer = None
+                
+                self._session.emit("agent_false_interruption", AgentFalseInterruptionEvent(resumed=True))
 
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -1292,7 +1358,10 @@ class AgentActivity(RecognitionHooks):
             "manual",
             "realtime_llm",
         ):
-            self._interrupt_by_audio_activity()
+            # Don't interrupt for soft interruptions (filler words only)
+            is_soft = self._is_soft_interruption(ev.alternatives[0].text)
+            if not is_soft:
+                self._interrupt_by_audio_activity()
 
             if (
                 speaking is False
@@ -1302,9 +1371,26 @@ class AgentActivity(RecognitionHooks):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
 
-        self._interrupt_paused_speech_task = asyncio.create_task(
-            self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
-        )
+            # Resume audio if it was paused by VAD
+            if is_soft and self._paused_speech is not None:
+                if self._session.output.audio and self._session.output.audio.can_pause:
+                    self._session.output.audio.resume()
+                    self._session._update_agent_state("speaking")
+                
+                self._paused_speech = None
+                if self._false_interruption_timer:
+                    self._false_interruption_timer.cancel()
+                    self._false_interruption_timer = None
+                
+                self._session.emit("agent_false_interruption", AgentFalseInterruptionEvent(resumed=True))
+
+        # Skip interrupting paused speech if this is a soft interruption (filler words only)
+        # This allows the false interruption timer to resume the agent's speech
+        is_soft_for_paused = self._is_soft_interruption(ev.alternatives[0].text)
+        if not is_soft_for_paused:
+            self._interrupt_paused_speech_task = asyncio.create_task(
+                self._interrupt_paused_speech(old_task=self._interrupt_paused_speech_task)
+            )
 
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
         if (
@@ -1364,6 +1450,13 @@ class AgentActivity(RecognitionHooks):
 
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
+
+        # Check if this is a soft interruption (only filler words)
+        is_soft = self._is_soft_interruption(info.new_transcript)
+        
+        if is_soft:
+            self._cancel_preemptive_generation()
+            return False
 
         if (
             self.stt is not None
