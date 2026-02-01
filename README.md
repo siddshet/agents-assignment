@@ -38,6 +38,7 @@ agents that can see, hear, and understand.
 - **Telephony integration**: Works seamlessly with LiveKit's [telephony stack](https://docs.livekit.io/sip/), allowing your agent to make calls to or receive calls from phones.
 - **Exchange data with clients**: Use [RPCs](https://docs.livekit.io/home/client/data/rpc/) and other [Data APIs](https://docs.livekit.io/home/client/data/) to seamlessly exchange data with clients.
 - **Semantic turn detection**: Uses a transformer model to detect when a user is done with their turn, helps to reduce interruptions.
+- **Smart interruption handling**: Configure filler words (like "yeah", "okay", "hmm") to be ignored during agent speech, preventing unnecessary pauses while still allowing real interruptions.
 - **MCP support**: Native support for MCP. Integrate tools provided by MCP servers with one loc.
 - **Builtin test framework**: Write tests and use judges to ensure your agent is performing as expected.
 - **Open-source**: Fully open-source, allowing you to run the entire stack on your own servers, including [LiveKit server](https://github.com/livekit/livekit), one of the most widely used WebRTC media servers.
@@ -102,6 +103,9 @@ async def entrypoint(ctx: JobContext):
         stt=deepgram.STT(model="nova-3"),
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=elevenlabs.TTS(),
+        # Configure filler words to ignore (prevents agent from pausing on "yeah", "okay", etc.)
+        # Default: ['yeah', 'ok', 'okay', 'hmm', 'oh', 'right', 'uh-huh', 'got it', 'sure']
+        interruption_ignore_words=['yeah', 'okay', 'hmm', 'uh-huh'],
     )
 
     await session.start(agent=agent, room=ctx.room)
