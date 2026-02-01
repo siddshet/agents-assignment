@@ -122,6 +122,19 @@ You'll need the following environment variables for this example:
 - OPENAI_API_KEY
 - ELEVEN_API_KEY
 
+#### How Smart Interruption Handling Works
+
+By default, voice agents pause immediately when they detect audio from the user (via VAD - Voice Activity Detection). This can cause awkward pauses when users make affirmation sounds like "yeah", "okay", or "hmm" while the agent is speaking.
+
+The `interruption_ignore_words` feature solves this by:
+
+1. **Deferring interruption decisions**: When `interruption_ignore_words` is configured, the agent waits for the STT (Speech-to-Text) transcript before deciding whether to pause
+2. **Checking for filler words**: Once the transcript arrives (~300-500ms delay), the agent checks if the spoken text contains only filler words
+3. **Continuing seamlessly**: If only filler words are detected, the agent continues speaking without any pause
+4. **Interrupting when needed**: If real words are detected (e.g., "Stop", "Wait", questions), the agent pauses and processes the interruption normally
+
+**Tradeoff**: Real interruptions have a small delay (~300-500ms) equal to STT latency, but this eliminates the awkward 2-3 second pauses caused by filler words.
+
 ### Multi-agent handoff
 
 ---
